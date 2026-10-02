@@ -31,11 +31,17 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { spawn } from 'child_process';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
 // ── Configuration ───────────────────────────────────────────────
 
+// Resolve deskkit.py: explicit env override → fallback to repo root relative to this file.
+// In ESM, import.meta.url is a file:// URL; fileURLToPath converts it to a filesystem path.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const DESKKIT_PY = path.resolve(
-  process.env.DESKKIT_PY || path.join(path.dirname(import.meta.url), '..', 'deskkit.py')
+  process.env.DESKKIT_PY || path.join(__dirname, '..', '..', 'deskkit.py')
 );
 const DESKKIT_DIR = path.dirname(DESKKIT_PY);
 

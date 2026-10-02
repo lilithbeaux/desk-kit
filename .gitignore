@@ -41,3 +41,10 @@ Thumbs.db
 *.compiled
 lib/
 backup/
+
+# MCP build output — rebuild with: cd mcp && npm install && npm run build
+# dist/
+
+# Python venv
+*.egg-info/
+.venv/
