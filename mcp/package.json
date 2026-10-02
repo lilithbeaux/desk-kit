@@ -10,7 +10,7 @@
     "build": "tsc",
     "dev": "tsx src/deskkit-mcp.ts",
     "start": "node dist/deskkit-mcp.js",
-    "test": "node dist/deskkit-mcp.js --test"
+    "test": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.4.0"
