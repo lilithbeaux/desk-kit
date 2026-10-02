@@ -1,0 +1,109 @@
+object ControllerForm: TControllerForm
+  Left = 200
+  Height = 800
+  Top = 100
+  Width = 1200
+  Caption = '617 Browser — ⎔ Hermaeus Waelon'
+  ClientHeight = 800
+  ClientWidth = 1200
+  WindowState = wsNormal
+  Visible = True
+  ShowInTaskBar = stAlways
+  Position = poScreenCenter
+  OnCloseQuery = FormCloseQuery
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  LCLVersion = '3.4.0.0'
+
+  object pnlToolbar: TPanel
+    Left = 0
+    Height = 36
+    Top = 0
+    Width = 1200
+    Align = alTop
+    BevelOuter = bvNone
+    Caption = ''
+    TabOrder = 0
+
+    object btnBack: TSpeedButton
+      Left = 4
+      Height = 28
+      Top = 4
+      Width = 28
+      Caption = '◀'
+      Flat = True
+      OnClick = btnBackClick
+    end
+
+    object btnForward: TSpeedButton
+      Left = 34
+      Height = 28
+      Top = 4
+      Width = 28
+      Caption = '▶'
+      Flat = True
+      OnClick = btnForwardClick
+    end
+
+    object edAddress: TEdit
+      Left = 68
+      Height = 28
+      Top = 4
+      Width = 900
+      TabOrder = 0
+      Text = 'about:blank'
+      OnKeyDown = edAddressKeyDown
+    end
+
+    object btnGo: TSpeedButton
+      Left = 974
+      Height = 28
+      Top = 4
+      Width = 40
+      Caption = 'Go'
+      Flat = True
+      OnClick = btnGoClick
+    end
+
+    object btnNewTab: TSpeedButton
+      Left = 1020
+      Height = 28
+      Top = 4
+      Width = 80
+      Caption = '+ New Tab'
+      Flat = True
+      OnClick = btnNewTabClick
+    end
+  end
+
+  object tbMain: TPageControl
+    Left = 0
+    Height = 728
+    Top = 36
+    Width = 1200
+    Align = alClient
+    TabOrder = 1
+    OnChange = tbMainChange
+  end
+
+  object pnlStatus: TPanel
+    Left = 0
+    Height = 24
+    Top = 764
+    Width = 1200
+    Align = alBottom
+    BevelOuter = bvLowered
+    Caption = '617 Browser — Native CEF4Delphi IPC'
+    Font.CharSet = ANSI_CHARSET
+    Font.Color = clGray
+    TabOrder = 2
+  end
+
+  object Timer1: TTimer
+    Enabled = True
+    Interval = 500
+    OnTimer = Timer1Timer
+    Left = 8
+    Top = 48
+  end
+end

@@ -1,0 +1,3 @@
+#!/bin/bash
+# deskkit — Context-aware CLI tool dispatcher
+exec python3 "$(dirname "$0")/deskkit.py" "$@"

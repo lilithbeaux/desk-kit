@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Node / MCP
+node_modules/
+*.log
+
+# Temporary / runtime
+/tmp/
+/tmp/deskkit_hotkeys/
+/tmp/deskkit_context.json
+*.pid
+
+# OS
+.DS_Store
+Thumbs.db
+*~
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Pascal / Lazarus
+*.ppu
+*.o
+*.compiled
+lib/
+backup/

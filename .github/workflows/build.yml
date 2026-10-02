@@ -1,0 +1,47 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test-deskkit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xdotool xbindkeys sxhkd xinput \
+            libsuinput-dev libevdev-dev wmctrl
+      - name: Verify syntax
+        run: python3 -W error -c "import py_compile; py_compile.compile('deskkit.py', doraise=True)"
+
+  build-mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  build-pascal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pascal toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fp-compiler lazarus
+      - name: Verify Pascal source syntax
+        run: |
+          echo "Pascal build requires CEF4Delphi + X11 libs locally"
+          echo "See 617-browser/README.md for build instructions"

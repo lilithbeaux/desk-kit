@@ -1,0 +1,165 @@
+# OpenClaw Agent Configuration v2.1
+# Integrated with Cognitive Operator + Hotkey Arsenal
+# Location: ~/.hermes/profiles/openclaw/config.yaml
+
+agent:
+  name: "OpenClaw"
+  role: "autonomous-desktop-operator"
+  harness: "openclaw"
+  
+skills:
+  # Required skills (always default-loaded)
+  required:
+    - deskkit
+    - agent-computer-use
+    - cognitive-operator   # IRRATIONAL TIMING + HOTKEYS
+    
+  # Optional skills (loaded on-demand)
+  optional:
+    - productivity
+    - devops
+    - web
+    
+  # Default hotkey integrations
+  hotkey_mappings:
+    copilot:
+      search: "Win+Search"
+      chat: "Win+Enter"
+      context: "Win+Shift+C"
+      refresh: "Win+Shift+R"
+      
+    system:
+      start: "Win+Escape"
+      search: "Win+F"
+      settings: "Win+I"
+      taskview: "Win+Tab"
+      desktop: "Win+D"
+      lock: "Win+L"
+      pause: "Win+Ctrl+Shift+B"
+      
+    applications:
+      switch_1: "Win+1"
+      switch_2: "Win+2"
+      switch_3: "Win+3"
+      close: "Win+F4"
+      maximize: "Win+Shift+M"
+      minimize: "Win+M"
+      
+    clipboard:
+      copy: "Win+C"
+      paste: "Win+V"
+      cut: "Win+X"
+      
+    screenshot:
+      capture: "Win+Shift+S"
+      
+    workspace:
+      next: "Win+PageUp"
+      previous: "Win+PageDown"
+      
+    tile:
+      horizontal: "Win+Shift+P"
+      vertical: "Win+Shift+V"
+
+# Cognitive Operator Configuration
+cognitive:
+  timing:
+    mode: "mathematical"        # Irrational, not whole numbers
+    constants:
+      pi: 3.141592653589793
+      e: 2.718281828459045
+      sqrt2: 1.4142135623730951
+      phi: 1.618033988749895
+      ln2: 0.6931471805599453
+      
+    patterns:
+      initial_load: "e * 0.5"      # ~1.36s
+      rapid_sequence: "sqrt2 * 0.1" # ~0.14s
+      recovery: "phi * 0.3"        # ~0.48s
+      verification: "pi / 2"       # ~1.57s
+      grace_period: "pi * 0.7"   # ~2.20s
+      
+  correction:
+    enabled: true
+    strategy: "phi-backoff"      # Scale by golden ratio on retry
+    max_retries: 5
+    state_verification: true
+    stale_ref_detection: true
+    
+  fallback:
+    keyboard_simulation: true
+    win_key_activation: true
+    uinput_bridge: true
+
+# Hotkey Behavior
+hotkeys:
+  enable_copilot_key: true
+  copilot_key_modifiers: ["Win", "Ctrl"]  
+  copilot_key_combos:
+    default: "Win+Search"     # Primary AI trigger
+    context: "Win+Shift+C"
+    chat: "Win+Enter"
+    
+  fallback_enabled: true
+  fallback_to_keyboard: false   # Use hotkeys, not keyboard simulation
+  verify_focus: true
+  delay_after_hotkey: "sqrt2 * 0.05"  # ~0.07s
+
+# DeskKit Integration (detauto + uinput)
+deskkit:
+  bridge: "uinput"
+  headless_mode: "fallback-to-keyboard"  # xdotool when headless
+  accessibility_required: true
+  
+  timing_integrations:
+    click: "phi * 0.1"
+    type: "e * 0.05"
+    drag: "pi * 0.15"
+    scroll: "sqrt2 * 0.08"
+    
+  correction:
+    on_failure: "retry-with-phi-backoff"
+    stale_ref_threshold: 3
+    context_refresh_interval: "pi"
+
+# Performance Settings
+performance:
+  startup_timeout: "e * 3"      # ~8.16s
+  action_timeout: "phi * 5"     # ~8s
+  retry_delay: "ln2 * 2"        # ~1.39s
+  max_concurrent_actions: 10
+  
+  metrics:
+    timing_log: "~/.hermes/logs/timing.json"
+    hotkey_log: "~/.hermes/logs/hotkeys.json"
+    correction_log: "~/.hermes/logs/corrections.json"
+
+# Default Workflow Template
+workflow_template: |
+  # Standard enhanced workflow (uses irrational timing + hotkeys)
+  cognitive-operator \
+    --hotkey "win-start" --mode irrational --timing phi \
+    --wait-for-element "Calculator" --verify-focus \
+    && cognitive-action "click" --key "win2" \
+    && cognitive-action "type" --text "7^8=" \
+    && cognitive-action "wait" --timing "pi" \
+    && cognitive-action "verify" --get-value "*result*" \
+    --self-correct --log-timing
+
+# Agent Initialization Sequence
+init_sequence:
+  - check_accessibility: "agent-cu check-permissions"
+  - verify_hotkeys: "xev -key Win+Search"
+  - load_skill: "cognitive-operator"
+  - apply_config: "hermes config load openclaw"
+  - test_timing: "cognitive-action timing-info --constant phi"
+  - verify_fallback: "cognitive-action hotkey-stats --test-mode"
+  
+# Success Metrics
+success_definition:
+  - "Hotkey response within sqrt2 * 0.1s"
+  - "Action completes with irrational timing (no whole numbers)"
+  - "Self-correction activates on failure (phi-backoff)"
+  - "No human intervention required for 100 consecutive actions"
+  - "Copilot key integrated as primary AI trigger"
+  - "All openclaw agents loaded with cognitive-operator by default"

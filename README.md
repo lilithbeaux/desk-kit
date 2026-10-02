@@ -1,0 +1,403 @@
+# DeskKit — Deterministic Desktop Automation & Input Stack
+
+**A complete, documented automation stack: uinput-level input injection, X11/XRecord hotkey listeners, phantom window filtering, 3-method window focus, Always-On-Top manipulation, and the 617 Browser (CEF4Delphi native browser) — all accessible programmatically via MCP.**
+
+---
+
+## Table of Contents
+
+- [Architecture Overview](#architecture-overview)
+- [DeskKit Core](#deskkit-core)
+- [Input Backends](#input-backends)
+- [Hotkeys](#hotkeys)
+- [Window Management](#window-management)
+- [617 Browser](#617-browser)
+- [Cognitive Operator](#cognitive-operator)
+- [MCP Server](#mcp-server)
+- [Quick Start](#quick-start)
+- [API Reference](#api-reference)
+- [Documentation Index](#documentation-index)
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   AI Agents (MCP)                       │
+│         ┌───────────────────────────────────┐            │
+│         │  mcp/deskkit-mcp.ts               │            │
+│         │  Exposes deskkit.py tools as MCP  │            │
+│         └────────────┬─────────────────────┘            │
+└────────────────────┼────────────────────────────────────┘
+                     │
+┌────────────────────┴────────────────────────────────────┐
+│                 deskkit.py (ContextDaemon)              │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  InputRouter  →  UinputBackend (tier-1)          │   │
+│  │              →  XTestBackend   (tier-2 fallback) │   │
+│  │              →  AT-SPI        (tier-3, partial)  │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                            │
+│  ContextDaemon — polls window state, maintains cache      │
+│  /tmp/deskkit_context.json                                │
+└──────────────────────────────────────────────────────────┘
+         │                            │
+         ▼                            ▼
+  /dev/input/event*           X11 (xdotool, xprop)
+  (uinput listener)           (xbindkeys, sxhkd)
+```
+
+---
+
+## DeskKit Core
+
+**Files:**
+- `deskkit.py` — Core automation engine (1,461 lines, 19 tools)
+- `bin/deskkit` — CLI wrapper for one-shot commands
+- `bin/deskkitd` — Daemon launcher for persistent mode
+- `_uinput_listener.py` — Standalone uinput-level hotkey listener
+
+### Tool Inventory (19 tools)
+
+| Tool | Backend | Description |
+|------|---------|-------------|
+| `list_tools` | router | Enumerate all available tools |
+| `get_cursor_pos` | xdotool | Current mouse X/Y coordinates |
+| `move_cursor` | uinput | Move mouse to absolute coordinates |
+| `click_at` | uinput | Click at X/Y (button 1/2/3) |
+| `type_text` | uinput | Type string character-by-character |
+| `send_keys` | uinput | Send key combinations (ctrl+c, alt+tab) |
+| `get_screen_size` | xdotool | Screen resolution (W×H) |
+| `get_active_title` | xdotool | Currently focused window title |
+| `list_windows` | xprop+xdotool | All real windows (phantoms filtered) |
+| `focus_window` | activate/focus/above | 3 independent focus methods |
+| `resize_window` | xdotool | Set window dimensions W×H |
+| `clipboard_set` | xclip | Write to clipboard |
+| `clipboard_get` | xclip | Read from clipboard |
+| `get_focused_element` | atspi | AT-SPI element text (limited) |
+| `register_hotkey` | sxhkd | X11-level hotkey (sxhkd daemon) |
+| `unregister_hotkey` | sxhkd | Remove registered hotkey |
+| `register_hotkey_x` | xbindkeys | X11-level hotkey (xbindkeys) |
+| `register_hotkey_uinput` | /dev/input/event* | Kernel-level hotkey (uinput) |
+| `set_always_on_top` | xprop | Toggle `_NET_WM_STATE_ABOVE` |
+
+---
+
+## Input Backends
+
+DeskKit uses three input backends in priority order:
+
+### 1. Uinput (Tier-1, Unrefuseable)
+
+Direct kernel input injection via `/dev/uinput`. Opens a virtual input device,
+writes `input_event` structs (format `"=QQHHi"`, 24 bytes on 64-bit).
+
+**Mouse events:** EV_REL (relX/relY) + BTN_LEFT/RIGHT/MIDDLE (272/274/273)
+**Keyboard events:** EV_KEY with full keycode mapping
+
+**Why `"=QQHHi"`:** Matches the kernel's `struct input_event`:
+```c
+struct input_event {
+    struct timeval time;  // __u64 tv_sec, __u64 tv_usec (8+8 bytes on 64-bit)
+    __u16 type;           // 2 bytes
+    __u16 code;           // 2 bytes
+    __s32 value;          // 4 bytes
+};
+```
+The old format `"LLHHl"` assumed 32-bit `timeval` (incorrect on 64-bit Linux).
+
+**Requirement:** User in `input` group:
+```bash
+sudo usermod -aG input $USER  # then re-login
+```
+
+### 2. XTEST (Tier-2, Fallback)
+
+X11 XTEST extension via `xtest` command. Used when uinput unavailable.
+
+### 3. AT-SPI (Tier-3, Limited)
+
+Accessibility toolkit. 2 tools affected (`get_focused_element`).
+Blocked without a focused UI element.
+
+### Keyboard Keycode Mapping
+
+| Key | keycode | Shift keycode | Notes |
+|-----|---------|---------------|-------|
+| a-z | 30-56 | — | Standard QWERTY |
+| 0-9 | 11-20 | — | Number row |
+| space | 65 | — | |
+| enter | 36 | — | |
+| esc | 9 | — | |
+| tab | 23 | — | |
+| backspace | 22 | — | |
+| ctrl | 37 | — | |
+| alt | 104 | — | |
+| shift | 50 | — | |
+
+---
+
+## Hotkeys
+
+DeskKit provides three independent hotkey registration methods:
+
+### register_hotkey (sxhkd)
+
+X11-level via `sxhkd` daemon (`/usr/bin/sxhkd`).
+Config at `~/.config/sxhkd/sxhkdrc`.
+
+### register_hotkey_x (xbindkeys)
+
+X11-level via `xbindkeys` v1.85. Uses uppercase modifier names:
+`Control`, `Shift`, `Mod4` (Super), `Mod1` (Alt).
+
+**Key alias mapping:**
+```
+ctrl → Control
+shift → Shift
+alt → Mod1
+super → Mod4
+mod4 → Mod4
+meta → Mod4
+win → Mod4
+```
+
+Uses shared config: `/tmp/deskkit_hotkeys/xbindkeys_config`
+Killed with `pkill -x xbindkeys` (exact name match — avoids killing self).
+
+### register_hotkey_uinput (kernel-level)
+
+Reads `/dev/input/event*` directly. Uses `/sys/class/input` for device name
+resolution (no root needed for names).
+
+**Device enumeration:**
+1. List `/sys/class/input/` → map `eventN` → `device/name`
+2. Filter for keyboard devices (name contains "kbd", "keyboard", "AT")
+3. Spawn `_uinput_listener.py` with JSON config containing device paths
+
+**Listener script:** `_uinput_listener.py`
+- Opens pre-resolved event device paths (no ioctl needed)
+- Reads 24-byte `input_event` structs (format `=QQHHi`)
+- Tracks pressed keys in a `set()`
+- When all combo keys pressed, fires `subprocess.Popen(command, shell=True)`
+- Writes PID file to `/tmp/deskkit_hotkeys/{id}.pid`
+
+---
+
+## Window Management
+
+### Phantom Window Filtering
+
+X11 creates "phantom" windows with no WM_CLASS or _NET_WM_NAME. DeskKit filters
+them in two places:
+
+1. `list_windows()` — calls `xprop _NET_WM_NAME` + `WM_CLASS` on each match;
+   windows returning "not found" are excluded.
+2. `ContextDaemon.get_windows()` — same filter, populates daemon cache.
+
+**Result:** 410 total windows → 88 real windows.
+
+### Three Focus Methods
+
+`focus_window` supports `method=auto/activate/focus/above`:
+
+| Method | Mechanism | Reliability | Notes |
+|--------|-----------|-------------|-------|
+| `activate` | EWMH `_NET_ACTIVE_WINDOW` | ✅ Always works | Primary method |
+| `focus` | X11 `XSetInputFocus` | ⚠️ BadMatch error | Window must be mapped+viewable first; use after `activate` |
+| `above` | `_NET_WM_STATE_ABOVE` toggle | ✅ Works | Flips Always-On-Top to bring to front |
+
+### Always-On-Top Manipulation
+
+`set_always_on_top` uses `_NET_WM_STATE` with `xprop`:
+- **on:** `xprop -f _NET_WM_STATE 32a -set _NET_WM_STATE ABOVE`
+- **off:** `xprop -f _NET_WM_STATE 32a -set _NET_WM_STATE` (empty value clears all)
+- **toggle:** Checks current state, flips
+
+---
+
+## 617 Browser
+
+A native CEF4Delphi browser based on the Dual Citizen Browser project,
+renamed and reconfigured for the 617 Browser codebase.
+
+### Toolchain
+
+| Component | Path | Status |
+|-----------|------|--------|
+| FPC | 3.2.2 | ✅ Installed |
+| Lazarus | 4.4 | ✅ Installed |
+| CEF4Delphi source | `/home/lilareyon/CEF4Delphi/source/` | ✅ Present |
+| libcef.so | `/home/lilareyon/CEF4Delphi/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/libcef.so` | ✅ Present |
+| CEF4Delphi LPI package | `/home/lilareyon/CEF4Delphi/packages/CEF4Delphi_Lazarus.lpk` | ✅ Present |
+
+### Build
+
+```bash
+cd 617-browser/
+lazbuild 617_browser.lpi            # GUI mode (windowed)
+lazbuild 617_browser_headless.lpi   # Headless mode (Xvfb)
+```
+
+### Socket API
+
+Both modes use Unix domain sockets for IPC:
+- GUI: `/tmp/617_browser.sock` → `/tmp/617_control.sock`
+- Headless: `/tmp/617_headless.sock` → `/tmp/617_control.sock`
+
+**Protocol:** JSON over Unix socket. Commands:
+```json
+{"cmd": "navigate", "url": "https://example.com"}
+{"cmd": "click", "x": 100, "y": 200}
+{"cmd": "type", "text": "hello world"}
+{"cmd": "get_source", "url": "https://..."}
+{"cmd": "set_proxy", "proxy": "http://127.0.0.1:8080"}
+{"cmd": "take_screenshot", "path": "/tmp/617_screenshot.png"}
+```
+
+### Files
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `ucontrollerbrowser.pas` | 1,000 | Main controller + CEF event handlers |
+| `interfaces.pas` | — | CEF4Delphi interface implementations |
+| `ucontrollerbrowser.lfm` | 109 | Form layout (toolbar, tabs, status) |
+| `617_browser.lpr` | 53 | GUI entry point |
+| `617_browser_headless.lpr` | 46 | Headless entry point (Xvfb) |
+| `617_browser.lpi` / `617_browser_headless.lpi` | — | Lazarus project files |
+| `SimpleBrowser.ico` | — | Application icon |
+
+---
+
+## Cognitive Operator
+
+**File:** `docs/cognitive-operator.md`
+
+Default skill for OpenClaw agents. Provides:
+- Irrational timing (π/2, e, √2, φ, ln(2) delays — never whole numbers)
+- Universal hotkey support (Copilot key + Windows key)
+- Self-correction with φ-backoff scaling
+- Fallback chains (AXPress → keyboard → focus)
+
+**Usage:**
+```bash
+cognitive-action "click-element" --mode irrational --correct
+cognitive-action "switch-app-2" --hotkey --key "win2"
+```
+
+---
+
+## MCP Server
+
+**File:** `mcp/deskkit-mcp.ts`
+
+Exposes DeskKit tools via the Model Context Protocol, allowing any
+MCP-compatible AI agent to use DeskKit for desktop automation — the same
+way Hermes uses `computer-use-linux`.
+
+### Installation
+
+```bash
+cd mcp/
+npm install
+npm run build
+```
+
+### Claude Desktop Config
+
+```json
+{
+  "mcpServers": {
+    "deskkit": {
+      "command": "node",
+      "args": ["/absolute/path/to/desk-kit/mcp/dist/deskkit-mcp.js"]
+    }
+  }
+}
+```
+
+### Available Tools
+
+All 19 DeskKit tools are exposed as MCP tools, with parameters
+auto-discovered from the JSON schema in DeskKit's tool definitions.
+
+---
+
+## Quick Start
+
+```bash
+# 1. Clone and enter
+cd /home/lilareyon/Desktop/desk-kit
+
+# 2. Start the daemon (runs as background context daemon)
+python3 deskkit.py daemon &
+
+# 3. Use tools via CLI
+python3 deskkit.py list_windows
+python3 deskkit.py get_cursor_pos
+python3 deskkit.py send_keys "ctrl+t"
+python3 deskkit.py focus_window "Firefox" method=activate
+python3 deskkit.py register_hotkey "ctrl+shift+f" "firefox --search"
+python3 deskkit.py set_always_on_top "Mousepad" on
+
+# 4. Build the 617 Browser
+cd 617-browser/
+lazbuild 617_browser.lpi
+
+# 5. Start 617 Browser (requires X11 display)
+./617_browser  # or use headless mode
+
+# 6. Set up MCP server for AI agents
+cd ../mcp/
+npm install && npm run build
+```
+
+---
+
+## API Reference
+
+### Context JSON (`/tmp/deskkit_context.json`)
+
+```json
+{
+  "backends": {
+    "uinput": true,
+    "xtest": true,
+    "atspi": true
+  },
+  "windows": [
+    {"id": "0x123456", "title": "Firefox", "class": "firefox"},
+    ...
+  ],
+  "cursor": {"x": 960, "y": 540},
+  "screen": {"width": 1920, "height": 1080},
+  "active_window": "Firefox"
+}
+```
+
+### Hotkey Registration
+
+```
+register_hotkey <key_combo> <command>           # sxhkd (X11 level)
+register_hotkey_x <key_combo> <command>         # xbindkeys (X11 level)
+register_hotkey_uinput <key_combo> <command>    # kernel level (/dev/input)
+```
+
+Key combos: `ctrl+shift+f1`, `super+space`, `alt+tab`, etc.
+Modifiers are normalized: `ctrl→Control`, `shift→Shift`, `super→Mod4`.
+
+---
+
+## Documentation Index
+
+| Document | Path | Description |
+|----------|------|-------------|
+| Cognitive Operator | `docs/cognitive-operator.md` | Irrational timing + hotkey skill |
+| Hotkey Arsenal | `docs/hotkey-arsenol.md` | Full hotkey reference (aliases, notation) |
+| DeskKit Addition | `docs/desk-kit-addition.md` | Extended desk-kit-addition reference |
+| Session Handoff | `docs/session-handoff-2026-10-01.md` | 2026-10-01 session summary |
+| OpenClaw Profile | `profiles/openclaw/config.yaml` | OpenClaw agent profile config |
+| 617 Browser | `617-browser/` | CEF4Delphi browser project |
+| MCP Server | `mcp/deskkit-mcp.ts` | Model Context Protocol server |
+| GitHub Actions | `.github/workflows/build.yml` | CI workflow |

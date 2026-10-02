@@ -1,0 +1,23 @@
+{
+  "name": "deskkit-mcp",
+  "version": "1.0.0",
+  "description": "MCP server exposing DeskKit desktop automation tools — uinput input injection, hotkey listeners, window management, and 617 Browser control.",
+  "bin": {
+    "deskkit-mcp": "dist/deskkit-mcp.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/deskkit-mcp.ts",
+    "start": "node dist/deskkit-mcp.js",
+    "test": "node dist/deskkit-mcp.js --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5.4",
+    "tsx": "^4.7"
+  }
+}
