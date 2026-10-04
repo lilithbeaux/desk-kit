@@ -1,4 +1,4 @@
-program 617_browser;
+program browser_617;
 
 {$mode objfpc}{$H+}
 {$I /home/lilareyon/CEF4Delphi/source/cef.inc}

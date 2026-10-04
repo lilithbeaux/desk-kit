@@ -228,9 +228,9 @@ renamed and reconfigured for the 617 Browser codebase.
 |-----------|------|--------|
 | FPC | 3.2.2 | ✅ Installed |
 | Lazarus | 4.4 | ✅ Installed |
-| CEF4Delphi source | `/home/lilareyon/CEF4Delphi/source/` | ✅ Present |
-| libcef.so | `/home/lilareyon/CEF4Delphi/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/libcef.so` | ✅ Present |
-| CEF4Delphi LPI package | `/home/lilareyon/CEF4Delphi/packages/CEF4Delphi_Lazarus.lpk` | ✅ Present |
+| CEF4Delphi source | `<CEF4Delphi-source>/source/` | ✅ Present |
+| libcef.so | `<CEF4Delphi-source>/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/libcef.so` | ✅ Present |
+| CEF4Delphi LPI package | `<CEF4Delphi-source>/packages/CEF4Delphi_Lazarus.lpk` | ✅ Present |
 
 ### Build
 
@@ -328,7 +328,7 @@ auto-discovered from the JSON schema in DeskKit's tool definitions.
 
 ```bash
 # 1. Clone and enter
-cd /home/lilareyon/Desktop/desk-kit
+cd <desk-kit-repo>
 
 # 2. Start the daemon (runs as background context daemon)
 python3 deskkit.py daemon &
