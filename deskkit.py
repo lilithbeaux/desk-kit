@@ -25,9 +25,16 @@ Usage:
   deskkit describe <tool>         Show full contract for a tool
 """
 
-import json, os, sys, time, socket, struct, ctypes, ctypes.util, subprocess, select, re
+import json, os, sys, time, signal, threading, socket, struct, ctypes, ctypes.util, subprocess, select, re
 from pathlib import Path
 from typing import Any
+
+# AT-SPI perception/action layer lives in atspi_resolve.py (see that file for
+# the three bugs this replaced). Guarded so deskkit.py still imports alone.
+try:
+    import atspi_resolve as ATSPI
+except Exception:  # pragma: no cover
+    ATSPI = None
 
 # ─── Paths ───────────────────────────────────────────────────────────────
 SKILL_DIR = Path(__file__).parent.resolve()
@@ -114,6 +121,13 @@ class uinput_user_dev_full(ctypes.Structure):
 class ContextDaemon:
     def __init__(self):
         self.display = os.environ.get("DISPLAY", ":0")
+        # Resolve AT-SPI focus off the hot path: the walk costs ~0.3s and this
+        # loop writes context every 50ms, so it runs on its own thread.
+        try:
+            if ATSPI:
+                ATSPI.start_background_refresh()
+        except Exception:
+            pass
 
     def get_active_window(self) -> dict:
         """Get active window via X11 EWMH."""
@@ -227,15 +241,12 @@ class ContextDaemon:
             backends["xtest"] = (r.returncode == 0)
         except: pass
 
-        # Test AT-SPI — use NameHasOwner on the AT-SPI bus
+        # Test AT-SPI — probe the name that is actually owned on the
+        # accessibility bus. The registry is `org.a11y.atspi.Registry`;
+        # `org.a11y.atspi0` is never owned, which made this probe always False and
+        # gated the three AT-SPI tools shut.
         try:
-            r = subprocess.run(["dbus-send", "--bus=unix:path=/run/user/1000/at-spi/bus",
-                                "--print-reply", "--dest=org.freedesktop.DBus",
-                                "/org/freedesktop/DBus",
-                                "org.freedesktop.DBus.NameHasOwner",
-                                "string:org.a11y.atspi0"],
-                               capture_output=True, timeout=2, text=True)
-            backends["atspi"] = "boolean true" in r.stdout.lower()
+            backends["atspi"] = bool(ATSPI and ATSPI.available())
         except: pass
 
         return {"input_backends": backends}
@@ -252,38 +263,53 @@ class ContextDaemon:
         return ctx
 
     def detect_atspi_focus(self) -> dict:
-        """Check if AT-SPI has a focused element."""
-        ctx = {"atspi_has_focus": False}
+        """Focused AT-SPI element, read from the background resolver.
+
+        No D-Bus work happens here — the resolver thread owns that — so the
+        50ms context loop never blocks on an accessibility walk.
+        """
+        ctx = {"atspi_has_focus": False, "atspi_focus": None}
         try:
-            # Verify AT-SPI bus is available first
-            r = subprocess.run(
-                ["dbus-send", "--bus=unix:path=/run/user/1000/at-spi/bus",
-                 "--print-reply", "--dest=org.freedesktop.DBus", "/org/freedesktop/DBus",
-                 "org.freedesktop.DBus.NameHasOwner", "string:org.a11y.atspi0"],
-                capture_output=True, timeout=2, text=True)
-            if "boolean true" not in r.stdout.lower():
-                return ctx
-            # Try GetFocus on the desktop root
-            r = subprocess.run(
-                ["dbus-send", "--bus=unix:path=/run/user/1000/at-spi/bus",
-                 "--print-reply", "--dest=org.a11y.atspi0",
-                 "--type=method_call", "/org/a11y/atspi/accessible/desktop/0",
-                 "org.a11y.atspi.Accessible.GetFocus"],
-                capture_output=True, timeout=2, text=True)
-            if r.returncode == 0 and "object path" in r.stdout:
-                ctx["atspi_has_focus"] = True
+            if ATSPI:
+                node = (ATSPI.current_focus() or {}).get("focus")
+                ctx["atspi_has_focus"] = bool(node)
+                if node:
+                    ctx["atspi_focus"] = {"role": node.get("role"),
+                                          "name": node.get("name")}
         except: pass
         return ctx
 
     def run(self, interval=0.05):
-        """Main daemon loop — polls X11 at interval, writes context.json."""
-        old_sigchld = None
+        """Main daemon loop — polls X11 at interval, writes context.json.
+
+        A watchdog thread yells (and dumps every thread's stack to the fault
+        log) if no context write lands for ~5s. A stall used to be silent: the
+        unit stayed green (active/running) while the file went stale and every
+        context-gated tool read a dead snapshot.
+        """
+        import faulthandler
+        _fd = open("/tmp/deskkit-fault.log", "a")
+        faulthandler.enable(file=_fd, all_threads=True)
+        faulthandler.register(signal.SIGUSR1, file=_fd, all_threads=True)
+        last = [time.time()]
+
+        def _watch():
+            while True:
+                time.sleep(3)
+                if time.time() - last[0] > (interval + 5):
+                    sys.stderr.write("WATCHDOG: context write stalled "
+                                     f"{time.time() - last[0]:.1f}s\n")
+                    faulthandler.dump_traceback(file=_fd, all_threads=True)
+
+        threading.Thread(target=_watch, name="context-watchdog", daemon=True).start()
+
         while True:
             ctx = self.sample_once()
             tmp = str(CONTEXT_FILE) + ".tmp"
             with open(tmp, "w") as f:
                 json.dump(ctx, f)
             os.replace(tmp, CONTEXT_FILE)
+            last[0] = time.time()
             time.sleep(interval)
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -424,65 +450,31 @@ class YdotoolBackend:
 # ─────────────────────────────────────────────────────────────────────────
 
 class AtSpiClient:
-    """Minimal AT-SPI D-Bus client for action invocation.
-    Connects to /run/user/1000/at-spi/bus directly."""
-    def __init__(self):
-        self.bus_path = "/run/user/1000/at-spi/bus"
-        self.sock = None
-        self._connect()
+    """Compatibility shim over atspi_resolve.
 
-    def _connect(self):
-        try:
-            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            self.sock.connect(self.bus_path)
-            self.sock.settimeout(2.0)
-            # Send HELLO
-            self._send_dbus_method("org.freedesktop.DBus", "/org/freedesktop/DBus",
-                                   "org.freedesktop.DBus.Hello")
-            # Wait for response
-            self._recv()
-        except Exception as e:
-            self.sock = None
-
-    def _send_dbus_method(self, dest, path, method, args=None):
-        """Build and send a minimal D-Bus method call."""
-        # This is a simplified implementation — for a full D-Bus client we'd need
-        # proper message framing, but dbus-send covers most cases
-        pass
+    What this class used to be: a raw socket to a hardcoded bus path, a
+    `_send_dbus_method` stub that did nothing, a query for the bus name
+    `org.a11y.atspi0` (never owned) at the path `.../accessible/desktop/0`
+    (does not exist) calling `Accessible.GetFocus` (not in the interface), and
+    an `invoke_action` that returned True whenever dbus-send exited 0 — a false
+    success reported for a call that never landed. It now delegates to
+    atspi_resolve.py, which talks to the real registry and reports reality.
+    """
 
     def get_focused_element(self) -> dict:
-        """Get the currently focused AT-SPI element."""
-        cmd = [
-            "dbus-send", "--bus=unix:path=/run/user/1000/at-spi/bus",
-            "--print-reply", "--dest=org.a11y.atspi0",
-            "--type=method_call",
-            "/org/a11y/atspi/accessible/desktop/0",
-            "org.a11y.atspi.Accessible.GetFocus"
-        ]
-        try:
-            r = subprocess.run(cmd, capture_output=True, timeout=3, text=True)
-            if r.returncode == 0:
-                return {"focused": r.stdout, "has_atspi_focus": True}
-        except: pass
-        return {"focused": None, "has_atspi_focus": False}
+        if not ATSPI:
+            return {"status": "error", "message": "atspi_resolve module not available"}
+        r = ATSPI.resolve_focus()
+        node = r.get("focus")
+        if node:
+            return node
+        return {"status": "error", "message": r.get("message")}
 
     def invoke_action(self, action_index: int = 0) -> bool:
-        """Invoke the default action on the focused AT-SPI element."""
-        cmd = [
-            "dbus-send", "--bus=unix:path=/run/user/1000/at-spi/bus",
-            "--print-reply", "--dest=org.a11y.atspi0",
-            "--type=method_call",
-            "/org/a11y/atspi/accessible/desktop/0",
-            "org.a11y.atspi.Accessible.GetFocus"
-        ]
-        try:
-            r = subprocess.run(cmd, capture_output=True, timeout=3, text=True)
-            if r.returncode == 0:
-                # Parse the returned object path and invoke action
-                # The focused element is returned as an object path
-                return True
-        except: pass
-        return False
+        if not ATSPI:
+            return False
+        r = ATSPI.do_action((ATSPI.resolve_focus() or {}).get("focus"), action_index)
+        return r.get("status") == "ok"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1054,20 +1046,28 @@ class ToolExecutor:
                 "width": width, "height": height}
 
     def get_focused_element(self):
-        atspi = AtSpiClient()
-        result = atspi.get_focused_element()
-        return {"status": "ok", **result}
+        """Read the focused accessibility node (real AT-SPI resolution)."""
+        if not ATSPI:
+            return {"status": "error", "message": "atspi_resolve module not available"}
+        return ATSPI.focused_element()
 
     def atspi_click(self):
-        atspi = AtSpiClient()
-        if atspi.invoke_action(0):
-            return {"status": "ok", "method": "atspi"}
-        return {"status": "error", "message": "AT-SPI action invocation failed"}
+        """Invoke the focused node's default accessibility action.
+
+        Reports success only when the action actually landed, and says why when
+        it did not (no node resolved, or the node has no Action interface).
+        """
+        if not ATSPI:
+            return {"status": "error", "message": "atspi_resolve module not available"}
+        r = ATSPI.resolve_focus()
+        return ATSPI.do_action(r.get("focus"), 0)
 
     def atspi_read_text(self):
-        atspi = AtSpiClient()
-        elem = atspi.get_focused_element()
-        return {"status": "ok", "element": elem}
+        """Read text from the focused accessibility node."""
+        if not ATSPI:
+            return {"status": "error", "message": "atspi_resolve module not available"}
+        r = ATSPI.resolve_focus()
+        return ATSPI.read_text(r.get("focus"))
 
     def register_hotkey(self, key: str, command: str):
         """Register a global hotkey via sxhkd.

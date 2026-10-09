@@ -36,7 +36,7 @@
 │  ┌──────────────────────────────────────────────────┐   │
 │  │  InputRouter  →  UinputBackend (tier-1)          │   │
 │  │              →  XTestBackend   (tier-2 fallback) │   │
-│  │              →  AT-SPI        (tier-3, partial)  │   │
+│  │              →  AT-SPI        (tier-3, live)     │   │
 │  └──────────────────────────────────────────────────┘   │
 │                                                            │
 │  ContextDaemon — polls window state, maintains cache      │
@@ -53,34 +53,39 @@
 ## DeskKit Core
 
 **Files:**
-- `deskkit.py` — Core automation engine (1,461 lines, 19 tools)
+- `deskkit.py` — Core automation engine (21 tools)
+- `atspi_resolve.py` — AT-SPI perception/action layer (focus resolution, honest action results)
 - `bin/deskkit` — CLI wrapper for one-shot commands
 - `bin/deskkitd` — Daemon launcher for persistent mode
 - `_uinput_listener.py` — Standalone uinput-level hotkey listener
 
-### Tool Inventory (19 tools)
+### Tool Inventory (21 tools)
 
-| Tool | Backend | Description |
-|------|---------|-------------|
-| `list_tools` | router | Enumerate all available tools |
-| `get_cursor_pos` | xdotool | Current mouse X/Y coordinates |
-| `move_cursor` | uinput | Move mouse to absolute coordinates |
-| `click_at` | uinput | Click at X/Y (button 1/2/3) |
-| `type_text` | uinput | Type string character-by-character |
-| `send_keys` | uinput | Send key combinations (ctrl+c, alt+tab) |
-| `get_screen_size` | xdotool | Screen resolution (W×H) |
-| `get_active_title` | xdotool | Currently focused window title |
-| `list_windows` | xprop+xdotool | All real windows (phantoms filtered) |
-| `focus_window` | activate/focus/above | 3 independent focus methods |
-| `resize_window` | xdotool | Set window dimensions W×H |
-| `clipboard_set` | xclip | Write to clipboard |
-| `clipboard_get` | xclip | Read from clipboard |
-| `get_focused_element` | atspi | AT-SPI element text (limited) |
-| `register_hotkey` | sxhkd | X11-level hotkey (sxhkd daemon) |
-| `unregister_hotkey` | sxhkd | Remove registered hotkey |
-| `register_hotkey_x` | xbindkeys | X11-level hotkey (xbindkeys) |
-| `register_hotkey_uinput` | /dev/input/event* | Kernel-level hotkey (uinput) |
-| `set_always_on_top` | xprop | Toggle `_NET_WM_STATE_ABOVE` |
+| Tool | Backend | Description | Notes |
+|------|---------|-------------|-------|
+| `focus_window` | xdotool | Focus by title/class (activate/focus/above) | |
+| `list_windows` | xdotool | All X11 windows (phantom-filtered) | |
+| `get_active_title` | xdotool | Currently active window title | |
+| `get_window_info` | xdotool | Active window details (pid, class, title) | |
+| `get_window_geometry` | xdotool | Active window geometry (x, y, w, h) | |
+| `resize_window` | xdotool | Resize active window W×H | |
+| `get_cursor_pos` | xdotool | Current mouse X/Y coordinates | |
+| `move_cursor` | uinput | Move mouse to absolute coordinates | |
+| `click_at` | uinput | Click at X/Y (button 1/2/3) | |
+| `type_text` | uinput | Type string character-by-character | |
+| `send_keys` | uinput | Send key combos (ctrl+c, alt+tab) | |
+| `clipboard_get` | xclip | Read clipboard | |
+| `clipboard_set` | xclip | Write to clipboard | |
+| `register_hotkey` | sxhkd | Register global hotkey | |
+| `unregister_hotkey` | sxhkd | Remove registered hotkey | |
+| `register_hotkey_x` | xbindkeys | Register X11-level hotkey | |
+| `register_hotkey_uinput` | uinput | Register kernel-level hotkey | |
+| `set_always_on_top` | xprop | Toggle `_NET_WM_STATE_ABOVE` | |
+| `get_focused_element` | atspi ✅ | Focused AT-SPI node (role, name, interfaces, bus/path) | Live — bounded walk, ~0.3s |
+| `atspi_click` | atspi ✅ | Invoke the focused node's default AccessibleAction | Needs a focused node exposing `Action` |
+| `atspi_read_text` | atspi ✅ | Read text from the focused node | Needs a focused node exposing `Text` |
+
+> **Regenerating this table:** this table is derived from `GET /tools` (from the running API server) cross-checked against the `TOOLS` registry in `deskkit.py`. To refresh, run `curl -s http://127.0.0.1:8642/tools` and compare against the `TOOLS = [...]` list in `deskkit.py` — the two are the canonical source.
 
 ---
 
@@ -116,10 +121,25 @@ sudo usermod -aG input $USER  # then re-login
 
 X11 XTEST extension via `xtest` command. Used when uinput unavailable.
 
-### 3. AT-SPI (Tier-3, Limited)
+### 3. AT-SPI (Tier-3, accessibility)
 
-Accessibility toolkit. 2 tools affected (`get_focused_element`).
-Blocked without a focused UI element.
+Perception **and** action over the accessibility bus. Gives DeskKit the one
+thing pixels cannot: the identity of the focused widget (`role`, `name`,
+available `interfaces`) without vision, OCR or a screenshot.
+
+Three tools: `get_focused_element` (read), `atspi_read_text` (read text),
+`atspi_click` (invoke the node's default `AccessibleAction`).
+
+**How focus is resolved** (measured on this host, ~0.3 s per walk):
+registry → active window (by pid) → bounded walk of each app tree. The old
+code asked the bus for `org.a11y.atspi0` — a name nothing ever owns — so the
+probe always reported "unavailable" and gated all three tools shut. The live
+implementation walks the real `org.a11y.atspi.Registry`.
+
+Resolution runs on a background thread (`start_background_refresh`), so the
+20 Hz context loop never blocks on D-Bus. `atspi_click` reports success
+**only when the action actually landed**; with no focused node it returns an
+error that says so.
 
 ### Keyboard Keycode Mapping
 
@@ -319,7 +339,7 @@ npm run build
 
 ### Available Tools
 
-All 19 DeskKit tools are exposed as MCP tools, with parameters
+All 21 DeskKit tools are exposed as MCP tools, with parameters
 auto-discovered from the JSON schema in DeskKit's tool definitions.
 
 ---
@@ -331,7 +351,7 @@ auto-discovered from the JSON schema in DeskKit's tool definitions.
 cd <desk-kit-repo>
 
 # 2. Start the daemon (runs as background context daemon)
-python3 deskkit.py daemon &
+python3 deskkit.py run &
 
 # 3. Use tools via CLI
 python3 deskkit.py list_windows
