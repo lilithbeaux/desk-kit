@@ -42,8 +42,8 @@ Thumbs.db
 lib/
 backup/
 
-# MCP build output — rebuild with: cd mcp && npm install && npm run build
-# dist/
+# MCP build output (mcp/dist) is ignored by the `dist/` rule above.
+# Rebuild with: cd mcp && npm install && npm run build
 
 # Python venv
 *.egg-info/

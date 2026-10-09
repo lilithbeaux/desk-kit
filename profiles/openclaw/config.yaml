@@ -1,6 +1,6 @@
 # OpenClaw Agent Configuration v2.1
 # Integrated with Cognitive Operator + Hotkey Arsenal
-# Location: ~/.hermes/profiles/openclaw/config.yaml
+# Installed to: ~/.hermes/profiles/openclaw/config.yaml  (this tracked file is the repo seed)
 
 agent:
   name: "OpenClaw"
