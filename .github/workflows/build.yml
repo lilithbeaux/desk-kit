@@ -17,8 +17,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          # NOTE: libsuinput-dev is NOT packaged on Ubuntu 24.04 (github runners) and
+          # DeskKit does not need it — the uinput backend is pure ctypes against
+          # /dev/uinput. libevdev-dev is kept for the evdev-based fallback paths.
           sudo apt-get install -y xdotool xbindkeys sxhkd xinput \
-            libsuinput-dev libevdev-dev wmctrl
+            libevdev-dev wmctrl
       - name: Verify syntax
         run: python3 -W error -c "import py_compile; py_compile.compile('deskkit.py', doraise=True)"
 
