@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>DeskKit — Reasoning Harvest</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #16161d; color: #f8f8f2; padding: 24px; max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 18px; letter-spacing: 0.5px; }
+    p { color: #8e8e8e; font-size: 13px; }
+    textarea { width: 100%; height: 260px; background: #0d0d13; color: #8be9fd; border: 1px solid #333; border-radius: 8px; padding: 12px; font-family: ui-monospace, monospace; font-size: 12px; box-sizing: border-box; }
+    input { width: 100%; background: #0d0d13; color: #f8f8f2; border: 1px solid #333; border-radius: 8px; padding: 10px; box-sizing: border-box; margin-bottom: 10px; font-size: 12px; }
+    button { background: #00efff; color: #0a0a0f; border: none; border-radius: 8px; padding: 10px 16px; font-weight: 700; font-size: 13px; cursor: pointer; margin-top: 10px; }
+    .out { margin-top: 14px; background: #0d0d13; border: 1px solid #50fa7b; border-radius: 8px; padding: 12px; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; min-height: 60px; }
+    .bad { border-color: #ff2f2f; }
+  </style>
+</head>
+<body>
+  <h1>⚡ Reasoning Harvest → Local Planner Lane</h1>
+  <p>Paste the reasoning/transcript from a big web-UI model. This ships it to the local lane (127.0.0.1:8773), which returns a concrete execution plan. The betterDeepSeek essence: big model thinks, local model executes. No API fees.</p>
+  <input id="note" placeholder="System note (optional) — e.g. role/objective for the planner lane">
+  <textarea id="tx" placeholder="Paste the captured reasoning here…"></textarea>
+  <button id="go">Ship to Local Lane</button>
+  <div id="out" class="out">—</div>
+  <script src="harvest.js"></script>
+</body>
+</html>

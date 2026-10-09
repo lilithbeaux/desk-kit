@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "DeskKit Commander",
+  "version": "0.1.0",
+  "description": "Drive the DeskKit REST API from the browser: run uinput tools, fire macros, and harvest web-UI reasoning into the local planner lane. No vision, no LLM, no middlemen.",
+  "permissions": ["commands", "storage", "clipboardRead"],
+  "host_permissions": [
+    "http://127.0.0.1:8642/*",
+    "http://localhost:8642/*",
+    "http://127.0.0.1:8773/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "DeskKit Commander"
+  },
+  "options_page": "harvest.html",
+  "commands": {
+    "run-desk-hotkey": {
+      "suggested_key": { "default": "Alt+Shift+D" },
+      "description": "Run the active-window probe against DeskKit"
+    }
+  }
+}
