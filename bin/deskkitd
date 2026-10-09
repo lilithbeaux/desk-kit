@@ -1,3 +1,11 @@
 #!/bin/bash
-# deskkitd — Context daemon launcher
+# deskkitd - Context daemon launcher
+#
+# deskkit.py talks to X11 (xdotool, xprop, XTest) and AT-SPI. All of those need a
+# DISPLAY and an X authority cookie, and a systemd user service inherits neither --
+# which is why list_windows returned "xdotool search failed" and the cursor/AT-SPI
+# backends reported false. Default them here; anything already exported wins.
+: "${DISPLAY:=:0.0}";                 export DISPLAY
+: "${XAUTHORITY:=$HOME/.Xauthority}"; export XAUTHORITY
+
 exec python3 "$(dirname "$0")/deskkit.py" run

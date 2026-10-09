@@ -6,7 +6,7 @@
 |---------|---------|---------|
 | FPC | 3.2.2 | `sudo apt install fp-compiler` |
 | Lazarus | 4.4 | `sudo apt install lazarus` |
-| CEF4Delphi | 131.4.1 | `/home/lilareyon/CEF4Delphi/` |
+| CEF4Delphi | 131.4.1 | `$CEF4DELPHI_DIR` |
 | libcef.so | 131.x | In CEF4Delphi Release/ directory |
 | X11 | — | `sudo apt install libx11-dev libxext-dev` |
 

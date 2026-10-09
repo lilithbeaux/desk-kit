@@ -17,9 +17,9 @@ begin
   GlobalCEFApp := TCefApplication.Create;
 
   // Configure headless CEF
-  GlobalCEFApp.FrameworkDirPath := '/home/lilareyon/CEF4Delphi/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/';
-  GlobalCEFApp.ResourcesDirPath := '/home/lilareyon/CEF4Delphi/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/';
-  GlobalCEFApp.LocalesDirPath   := '/home/lilareyon/CEF4Delphi/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/locales/';
+  GlobalCEFApp.FrameworkDirPath := GetEnv('CEF4DELPHI_DIR', './CEF4Delphi') + '/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/';
+  GlobalCEFApp.ResourcesDirPath := GetEnv('CEF4DELPHI_DIR', './CEF4Delphi') + '/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/';
+  GlobalCEFApp.LocalesDirPath   := GetEnv('CEF4DELPHI_DIR', './CEF4Delphi') + '/cef_binary_131.4.1+g437feba+chromium-131.0.6778.265_linux64/Release/locales/';
   GlobalCEFApp.EnableGPU        := False;  // Headless, no GPU needed
   GlobalCEFApp.LogFile          := '/tmp/cef_controller.log';
   GlobalCEFApp.LogSeverity      := 3;  // LOGSEVERITY_WARNING

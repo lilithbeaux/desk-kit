@@ -1,7 +1,7 @@
 unit uControllerBrowser;
 
 {$mode objfpc}{$H+}
-{$I /home/lilareyon/CEF4Delphi/source/cef.inc}
+{$I cef.inc}
 
 interface
 
@@ -14,9 +14,9 @@ uses
 const
   CMD_SOCKET     = '/tmp/617_browser.sock';
   BUS_SOCKET     = '/tmp/617_bus.sock';
-  PROFILES_FILE  = GetEnv('PROFILES_FILE', '/home/lilareyon/.config/617_browser/profiles.json');
+  PROFILES_FILE  = GetEnv('PROFILES_FILE', GetUserDir + '/.config/617_browser/profiles.json');
   MAX_TABS       = 16;
-  BASE_DATA_DIR  = '/home/lilareyon/.config/617_browser/';
+  BASE_DATA_DIR  = GetEnv('DESKKIT_617_DATA_DIR', GetUserDir + '/.config/617_browser/');
 
 type
   TTabInfo = record
