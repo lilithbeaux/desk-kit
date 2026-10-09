@@ -1,0 +1,329 @@
+# DeskKit — canonical operation schema
+#
+# DW-06 of docs/DESK-KIT-WORK-ORDERS.md (Lilareyon project).
+#
+# One record per operation. The schema is the *contract*; deskkit.py's TOOLS
+# registry is the *implementation*. schema/validate_schema.py cross-checks the
+# two so they cannot drift apart silently.
+#
+#   verb          unique dotted id, namespace.action
+#   tool          name in deskkit.py's TOOLS registry, or null if planned
+#   category      window | input | pointer | accessibility | clipboard | hotkey | wait
+#   summary       one-line human description
+#   params        {name: {type, required, default?, description?}}
+#   target        what the operation acts on
+#   preconditions context predicates that must hold before the call
+#                 (mirrors the tool's `requires` keys exactly)
+#   result        shape of the returned value
+#   side_effects  context fields the call updates
+#                 (mirrors the tool's `updates` keys exactly)
+#   implemented   false = schema-only, no tool bound yet
+#
+# Types: string | integer | boolean | object | array
+# Enumerations are `type: string` plus a `values: [...]` list (matches TOOLS).
+# `required` is caller-facing: true when the argument must be supplied.
+
+schema_version: 1
+types: [string, integer, boolean, object, array]
+categories: [window, input, pointer, accessibility, clipboard, hotkey, wait]
+
+operations:
+
+  # ─────────────────────────── Window ───────────────────────────
+  - verb: window.focus
+    tool: focus_window
+    category: window
+    summary: Focus a window by partial title or class match.
+    params:
+      title:  {type: string, required: true,  description: "Partial window title/class to match"}
+      method: {type: string, required: false, default: auto, values: [auto, activate, focus, above]}
+    target: {kind: window, by: [title, class]}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: [active_window.changed]
+    implemented: true
+
+  - verb: window.list
+    tool: list_windows
+    category: window
+    summary: List all X11 windows (title + class), phantom-filtered.
+    params: {}
+    target: {kind: screen}
+    preconditions: []
+    result: {type: object, keys: [status, windows]}
+    side_effects: []
+    implemented: true
+
+  - verb: window.active.title
+    tool: get_active_title
+    category: window
+    summary: Title of the currently active window.
+    params: {}
+    target: {kind: active_window}
+    preconditions: [has_active_window]
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  - verb: window.active.info
+    tool: get_window_info
+    category: window
+    summary: Details of the active window (pid, class, title).
+    params: {}
+    target: {kind: active_window}
+    preconditions: [has_active_window]
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  - verb: window.active.geometry
+    tool: get_window_geometry
+    category: window
+    summary: Geometry (x, y, width, height) of the active window.
+    params: {}
+    target: {kind: active_window}
+    preconditions: [has_active_window]
+    result: {type: object, keys: [status, x, y, width, height]}
+    side_effects: []
+    implemented: true
+
+  - verb: window.resize
+    tool: resize_window
+    category: window
+    summary: Resize the active window to the given dimensions.
+    params:
+      width:  {type: integer, required: true}
+      height: {type: integer, required: true}
+    target: {kind: active_window}
+    preconditions: [has_active_window]
+    result: {type: object, status: "ok | error"}
+    side_effects: [window_geometry.changed]
+    implemented: true
+
+  - verb: window.state.always_on_top
+    tool: set_always_on_top
+    category: window
+    summary: Toggle _NET_WM_STATE_ABOVE on the active window.
+    params:
+      state:  {type: string, required: false, default: toggle, values: [on, off, toggle]}
+    target: {kind: active_window}
+    preconditions: [has_active_window]
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  - verb: window.raise
+    tool: null
+    category: window
+    summary: "PLANNED: raise a window to the top without focusing it."
+    params:
+      title: {type: string, required: true}
+    target: {kind: window, by: [title, class]}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: false
+
+  # ─────────────────────────── Input ────────────────────────────
+  - verb: input.text
+    tool: type_text
+    category: input
+    summary: Type text into the focused window (uinput, XTEST fallback).
+    params:
+      text: {type: string, required: true}
+    target: {kind: focused_window}
+    preconditions: [has_active_window, input_backends.xtest]
+    result: {type: object, status: "ok | error"}
+    side_effects: [has_active_window.changed]
+    implemented: true
+
+  - verb: input.key
+    tool: send_keys
+    category: input
+    summary: "Send a key combination, e.g. 'ctrl+s', 'enter', 'alt+f4'."
+    params:
+      keys: {type: string, required: true}
+    target: {kind: focused_window}
+    preconditions: [has_active_window, input_backends.xtest]
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  # ─────────────────────────── Pointer ──────────────────────────
+  - verb: pointer.click
+    tool: click_at
+    category: pointer
+    summary: Click at absolute (x, y) screen coordinates.
+    params:
+      x:      {type: integer, required: true}
+      y:      {type: integer, required: true}
+      button: {type: integer, required: false, default: 1, description: "1=left, 2=middle, 3=right"}
+    target: {kind: screen, by: [x, y]}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: [cursor.changed]
+    implemented: true
+
+  - verb: pointer.move
+    tool: move_cursor
+    category: pointer
+    summary: Move the cursor to (x, y) without clicking.
+    params:
+      x: {type: integer, required: true}
+      y: {type: integer, required: true}
+    target: {kind: screen, by: [x, y]}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: [cursor]
+    implemented: true
+
+  - verb: pointer.position
+    tool: get_cursor_pos
+    category: pointer
+    summary: Current cursor (x, y) position.
+    params: {}
+    target: {kind: screen}
+    preconditions: []
+    result: {type: object, keys: [status, x, y]}
+    side_effects: [cursor.changed]
+    implemented: true
+
+  - verb: pointer.drag
+    tool: null
+    category: pointer
+    summary: "PLANNED: press, move, release between two points."
+    params:
+      x1:     {type: integer, required: true}
+      y1:     {type: integer, required: true}
+      x2:     {type: integer, required: true}
+      y2:     {type: integer, required: true}
+      button: {type: integer, required: false, default: 1}
+    target: {kind: screen, by: [x1, y1, x2, y2]}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: [cursor.changed]
+    implemented: false
+
+  # ─────────────────────── Accessibility ────────────────────────
+  - verb: accessibility.focus
+    tool: get_focused_element
+    category: accessibility
+    summary: The AT-SPI focused element (role, name, interfaces, bus/path).
+    params: {}
+    target: {kind: focused_element}
+    preconditions: [input_backends.atspi]
+    result: {type: object, status: "ok | error"}
+    side_effects: [atspi_focused.changed]
+    implemented: true
+
+  - verb: accessibility.action.click
+    tool: atspi_click
+    category: accessibility
+    summary: Invoke the default AccessibleAction on the focused AT-SPI node.
+    params: {}
+    target: {kind: focused_element}
+    preconditions: [input_backends.atspi, atspi_has_focus]
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  - verb: accessibility.text.read
+    tool: atspi_read_text
+    category: accessibility
+    summary: Read the text content of the focused AT-SPI node.
+    params: {}
+    target: {kind: focused_element}
+    preconditions: [input_backends.atspi, atspi_has_focus]
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  # ─────────────────────────── Clipboard ────────────────────────
+  - verb: clipboard.get
+    tool: clipboard_get
+    category: clipboard
+    summary: Read the current clipboard text.
+    params: {}
+    target: {kind: clipboard}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: [clipboard.changed]
+    implemented: true
+
+  - verb: clipboard.set
+    tool: clipboard_set
+    category: clipboard
+    summary: Write text to the clipboard.
+    params:
+      text: {type: string, required: true}
+    target: {kind: clipboard}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: [clipboard.changed]
+    implemented: true
+
+  # ─────────────────────────── Hotkeys ──────────────────────────
+  - verb: hotkey.register
+    tool: register_hotkey
+    category: hotkey
+    summary: Register a global hotkey via sxhkd; returns a hotkey_id.
+    params:
+      key:     {type: string, required: true, description: "e.g. 'super+space'"}
+      command: {type: string, required: true}
+    target: {kind: hotkey, by: [key]}
+    preconditions: []
+    result: {type: object, keys: [status, hotkey_id, key, command, config_file]}
+    side_effects: []
+    implemented: true
+
+  - verb: hotkey.register.kernel
+    tool: register_hotkey_uinput
+    category: hotkey
+    summary: Register a hotkey at the uinput/kernel level (unrefuseable).
+    params:
+      key:     {type: string, required: true}
+      command: {type: string, required: true}
+    target: {kind: hotkey, by: [key]}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  - verb: hotkey.register.x11
+    tool: register_hotkey_x
+    category: hotkey
+    summary: Register a hotkey at the X11 level via XRecord (xbindkeys).
+    params:
+      key:     {type: string, required: true}
+      command: {type: string, required: true}
+    target: {kind: hotkey, by: [key]}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  - verb: hotkey.unregister
+    tool: unregister_hotkey
+    category: hotkey
+    summary: Remove a previously registered hotkey by hotkey_id.
+    params:
+      id: {type: string, required: true}
+    target: {kind: hotkey, by: [id]}
+    preconditions: []
+    result: {type: object, status: "ok | error"}
+    side_effects: []
+    implemented: true
+
+  # ─────────────────────────── Wait ─────────────────────────────
+  - verb: wait.for_predicate
+    tool: null
+    category: wait
+    summary: "PLANNED: block until a context predicate holds (or timeout)."
+    params:
+      predicate: {type: string, required: true, description: "e.g. 'has_active_window', 'clipboard.changed'"}
+      timeout_s: {type: integer, required: false, default: 5}
+    target: {kind: context}
+    preconditions: []
+    result: {type: object, keys: [status, satisfied, reason]}
+    side_effects: []
+    implemented: false
