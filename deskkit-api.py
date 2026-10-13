@@ -65,22 +65,34 @@ def execute_tool(tool_name: str, args: list = None, params: dict = None):
         return {"status": "context_blocked", "message": blocked,
                 "tool": tool_name, "requires": tool.get("requires", {})}
 
-    # Parameter resolution: named `params` win, then positional `args` in
-    # schema order, then schema defaults.
+    # Parameter resolution: named `params` win, then positional `args` by
+    # schema name (not index), then schema defaults.
     spec = tool.get("parameters", {})
+    spec_names = list(spec.keys())
     pv = {}
-    i = 0
+    # First pass: handle named params
     for name, s in spec.items():
-        if name in params:  # explicit named
-            pv[name] = _coerce(params[name], s.get("type"))
-        elif i < len(args):  # positional
-            pv[name] = _coerce(args[i], s.get("type")); i += 1
-        elif "default" in s:
-            pv[name] = s["default"]
+        if name in params:
+            coerced = _coerce(params[name], s.get("type"), field_name=name)
+            if isinstance(coerced, dict) and coerced.get("status") == "validation_error":
+                return coerced
+            pv[name] = coerced
+    # Second pass: fill remaining from positional args by schema order
+    arg_idx = 0
+    for name in spec_names:
+        if name not in pv and arg_idx < len(args):
+            coerced = _coerce(args[arg_idx], spec[name].get("type"), field_name=name)
+            if isinstance(coerced, dict) and coerced.get("status") == "validation_error":
+                return coerced
+            pv[name] = coerced
+            arg_idx += 1
+        elif "default" in spec[name]:
+            pv[name] = spec[name]["default"]
     missing = [n for n, s in spec.items()
                if n not in pv and "default" not in s]
     if missing:
-        return {"status": "error", "message": f"Missing parameters: {missing}"}
+        return {"status": "error", "message": f"Missing parameters: {missing}",
+                "usage": f"deskkit {tool['name']} {' '.join(spec_names)}"}
 
     executor = ToolExecutor(ctx, InputRouter(ctx.get("input_backends", {})))
     handler = getattr(executor, tool["handler"])
@@ -90,14 +102,20 @@ def execute_tool(tool_name: str, args: list = None, params: dict = None):
     except Exception as e:
         return {"status": "error", "tool": tool_name, "message": str(e)}
 
-def _coerce(v, typ):
-    if typ == "integer":
-        return int(v)
-    if typ == "number":
-        return float(v)
-    if typ == "boolean":
-        return str(v).lower() in ("1", "true", "yes", "on")
-    return v
+def _coerce(v, typ, field_name="field"):
+    try:
+        if typ == "integer":
+            return int(v)
+        if typ == "number":
+            return float(v)
+        if typ == "boolean":
+            return str(v).lower() in ("1", "true", "yes", "on")
+        return v
+    except (ValueError, TypeError):
+        return {"status": "validation_error",
+                "message": f"Field '{field_name}' requires a {typ}.",
+                "expected": typ,
+                "got": str(v)}
 
 def run_macro(name: str, args: list = None, params: dict = None):
     """Execute a named macro step-by-step; log each step."""
@@ -149,6 +167,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path in ("/", "/health"):
+            ctx = load_context()
+            ts = ctx.get("timestamp", 0)
+            age = time.time() - ts if ts else None
+            input_backends = ctx.get("input_backends", {})
+            atspi_focus = ctx.get("atspi", {})
+            active = ctx.get("active_window", {})
             return self._json(200, {
                 "status": "ok",
                 "service": "deskkit-api",
@@ -156,6 +180,10 @@ class Handler(BaseHTTPRequestHandler):
                 "tools": len(TOOLS),
                 "context_file": str(deskkit.CONTEXT_FILE),
                 "has_context": os.path.exists(deskkit.CONTEXT_FILE),
+                "context_last_refresh_age_seconds": round(age, 2) if age is not None else None,
+                "input_backends_available": {k: v for k, v in input_backends.items() if k in ("uinput", "ydotool", "xtest")},
+                "atspi_has_focus": atspi_focus.get("has_focus", False) if isinstance(atspi_focus, dict) else False,
+                "active_window_title": active.get("title", "") if isinstance(active, dict) else "",
             })
         if path == "/tools":
             ctx = load_context()
@@ -172,6 +200,28 @@ class Handler(BaseHTTPRequestHandler):
                 if blocked:
                     unavail[-1]["blocked_reason"] = blocked
             return self._json(200, {"available": avail, "blocked": unavail})
+        if path == "/api/summary":
+            ctx = load_context()
+            active = ctx.get("active_window", {})
+            cursor = ctx.get("cursor", {})
+            clipboard = ctx.get("clipboard", {})
+            atspi = ctx.get("atspi", {})
+            return self._json(200, {
+                "active_window_geometry": {
+                    "x": active.get("x"), "y": active.get("y"),
+                    "width": active.get("width"), "height": active.get("height"),
+                    "id": active.get("id"), "id_int": active.get("id_int"),
+                    "title": active.get("title"),
+                },
+                "cursor_position": {
+                    "x": cursor.get("x"), "y": cursor.get("y"),
+                },
+                "clipboard_status": {
+                    "has_text": bool(clipboard.get("text", "")) if isinstance(clipboard, dict) else False,
+                    "text_length": len(str(clipboard.get("text", ""))) if isinstance(clipboard, dict) and clipboard.get("text") else 0,
+                },
+                "focused_element": atspi.get("focus", None) if isinstance(atspi, dict) else None,
+            })
         if path == "/context":
             return self._json(200, load_context())
         if path == "/macros":

@@ -162,8 +162,16 @@ class ContextDaemon:
                 "active_window": win_info,
                 "has_active_window": True
             }
-        except Exception:
-            return {"active_window": None, "has_active_window": False}
+        except FileNotFoundError:
+            return {"active_window": None, "has_active_window": False,
+                    "status": "error",
+                    "message": "xdotool not found",
+                    "hint": "Install xdotool via `sudo apt install xdotool`. Also ensure $DISPLAY points to a running X session."}
+        except Exception as e:
+            return {"active_window": None, "has_active_window": False,
+                    "status": "error",
+                    "message": f"Failed to get active window: {e}",
+                    "hint": "Ensure a display server is running ($DISPLAY must be set) and xdotool is installed."}
 
     def get_cursor_pos(self) -> dict:
         """Get cursor via xdotool."""
@@ -173,7 +181,12 @@ class ContextDaemon:
             m = re.search(r'x:(\d+)\s+y:(\d+)', out)
             if m:
                 return {"cursor": {"x": int(m.group(1)), "y": int(m.group(2))}}
-        except: pass
+        except FileNotFoundError:
+            return {"status": "error", "message": "xdotool not found",
+                    "hint": "Install xdotool via `sudo apt install xdotool`."}
+        except Exception as e:
+            return {"status": "error", "message": f"xdotool failed: {e}",
+                    "hint": "Ensure $DISPLAY points to a running X session and xdotool is installed."}
         return {"cursor": None}
 
     def get_clipboard(self) -> dict:
@@ -182,12 +195,24 @@ class ContextDaemon:
             out = subprocess.check_output(["xclip", "-selection", "clipboard", "-o"],
                                             stderr=subprocess.DEVNULL, text=True)
             return {"clipboard": {"text": out.strip(), "has_text": True}}
-        except: pass
+        except FileNotFoundError:
+            pass  # xclip not installed, try xsel
+        except Exception:
+            return {"clipboard": {"text": "", "has_text": False}, "status": "error",
+                    "message": "xclip failed to read clipboard",
+                    "hint": "Check $DISPLAY is correct or install xsel (`sudo apt install xsel`)."}
         try:
             out = subprocess.check_output(["xsel"], stderr=subprocess.DEVNULL, text=True)
             return {"clipboard": {"text": out.strip(), "has_text": True}}
-        except: pass
-        return {"clipboard": {"text": "", "has_text": False}}
+        except FileNotFoundError:
+            pass  # xsel not installed either
+        except Exception:
+            return {"clipboard": {"text": "", "has_text": False}, "status": "error",
+                    "message": "xsel failed to read clipboard",
+                    "hint": "Ensure a display server is running ($DISPLAY must be set)."}
+        return {"clipboard": {"text": "", "has_text": False}, "status": "error",
+                "message": "No clipboard utility found",
+                "hint": "Install xclip (`sudo apt install xclip`) or xsel (`sudo apt install xsel`)."}
 
     def get_windows(self) -> dict:
         """List windows via xdotool, filtering phantom windows."""
@@ -215,8 +240,14 @@ class ContextDaemon:
                     continue
                 windows.append({"id": f"0x{wid:07x}", "title": title or "", "class": cls or ""})
             return {"windows": windows, "window_count": len(windows), "phantom_count": phantom_count}
-        except: pass
-        return {"windows": [], "window_count": 0, "phantom_count": 0}
+        except FileNotFoundError:
+            return {"status": "error", "message": "xdotool not found",
+                    "hint": "Install xdotool via `sudo apt install xdotool`. Also ensure $DISPLAY points to a running X session.",
+                    "windows": [], "window_count": 0, "phantom_count": 0}
+        except Exception as e:
+            return {"status": "error", "message": f"get_windows failed: {e}",
+                    "hint": "Ensure a display server is running ($DISPLAY set) and xdotool is installed.",
+                    "windows": [], "window_count": 0, "phantom_count": 0}
 
     def detect_input_backends(self) -> dict:
         """Probe which input backends are available."""
@@ -227,27 +258,36 @@ class ContextDaemon:
             fd = os.open("/dev/uinput", os.O_WRONLY)
             os.close(fd)
             backends["uinput"] = True
-        except: pass
+        except PermissionError:
+            pass  # not root, no access to /dev/uinput
+        except FileNotFoundError:
+            pass  # /dev/uinput doesn't exist
+        except Exception:
+            pass  # other errors — backend stays False
 
         # Test ydotool
         try:
             r = subprocess.run(["ydotool", "key", "a"], capture_output=True, timeout=2)
             backends["ydotool"] = (r.returncode == 0)
-        except: pass
+        except FileNotFoundError:
+            pass  # ydotool binary not found
+        except Exception:
+            pass  # other errors
 
         # Test xdotool XTEST
         try:
             r = subprocess.run(["xdotool", "getactivewindow"], capture_output=True, timeout=2)
             backends["xtest"] = (r.returncode == 0)
-        except: pass
+        except FileNotFoundError:
+            pass  # xdotool binary not found
+        except Exception:
+            pass  # other errors
 
-        # Test AT-SPI — probe the name that is actually owned on the
-        # accessibility bus. The registry is `org.a11y.atspi.Registry`;
-        # `org.a11y.atspi0` is never owned, which made this probe always False and
-        # gated the three AT-SPI tools shut.
+        # Test AT-SPI
         try:
             backends["atspi"] = bool(ATSPI and ATSPI.available())
-        except: pass
+        except Exception:
+            pass  # D-Bus not available or other failure
 
         return {"input_backends": backends}
 
@@ -463,12 +503,25 @@ class AtSpiClient:
 
     def get_focused_element(self) -> dict:
         if not ATSPI:
-            return {"status": "error", "message": "atspi_resolve module not available"}
-        r = ATSPI.resolve_focus()
+            return {"status": "error", "message": "atspi_resolve module not available",
+                    "hint": "AT-SPI resolution is unavailable. Electron/GTK apps usually need `atk-bridge` installed. Install via `sudo apt install libatk-bridge2.0-0` and ensure dbus-broker or dbus-daemon is running."}
+        try:
+            r = ATSPI.resolve_focus()
+        except Exception as e:
+            return {"status": "error", "message": f"AT-SPI resolve failed: {e}",
+                    "hint": "Check that dbus is running (`systemctl --user status dbus`) and atk-bridge2 is installed."}
         node = r.get("focus")
         if node:
             return node
-        return {"status": "error", "message": r.get("message")}
+        hint_extra = []
+        if node is None:
+            hint_extra.append("No focused AT-SPI node found.")
+            hint_extra.append("Common causes:")
+            hint_extra.append("  • App runs without accessibility (try launching with ATK_BRIDGE_DBUS_ADDRESS)")
+            hint_extra.append("  • Wayland session: AT-SPI may be disabled under Wayland")
+            hint_extra.append("  • Toolkit not exposing UI elements (e.g., some Qt/WebApp combos)")
+        return {"status": "error", "message": r.get("message", "No focused element"),
+                "hint": "\n".join(hint_extra)}
 
     def invoke_action(self, action_index: int = 0) -> bool:
         if not ATSPI:
@@ -962,12 +1015,20 @@ class ToolExecutor:
         'auto' tries all three in sequence until one succeeds.
         """
         # Resolve window ID by title, then by class
-        r = self._run(["xdotool", "search", "--name", title])
+        try:
+            r = self._run(["xdotool", "search", "--name", title])
+        except FileNotFoundError:
+            return {"status": "error", "message": "xdotool not found",
+                    "hint": "Install xdotool via `sudo apt install xdotool`. Also ensure $DISPLAY points to a running X session."}
         if r.returncode != 0 or not r.stdout.strip():
-            r = self._run(["xdotool", "search", "--class", title])
+            try:
+                r = self._run(["xdotool", "search", "--class", title])
+            except FileNotFoundError:
+                return {"status": "error", "message": "xdotool not found",
+                        "hint": "Install xdotool via `sudo apt install xdotool`. Also ensure $DISPLAY points to a running X session."}
             if r.returncode != 0 or not r.stdout.strip():
                 return {"status": "error", "message": f"No window matching '{title}'",
-                        "methods_tried": []}
+                        "methods_tried": [], "hint": "Check window titles with list_windows, or focus the window first."}
         wid = r.stdout.strip().split("\n")[0]
 
         results = []
@@ -975,15 +1036,27 @@ class ToolExecutor:
 
         for m in methods_to_try:
             if m == "activate":
-                r = self._run(["xdotool", "windowactivate", "--", wid])
+                try:
+                    r = self._run(["xdotool", "windowactivate", "--", wid])
+                except FileNotFoundError:
+                    return {"status": "error", "message": "xdotool not found",
+                            "hint": "Install xdotool via `sudo apt install xdotool`. Also ensure $DISPLAY points to a running X session."}
                 ok = r.returncode == 0
             elif m == "focus":
-                r = self._run(["xdotool", "windowfocus", "--", wid])
+                try:
+                    r = self._run(["xdotool", "windowfocus", "--", wid])
+                except FileNotFoundError:
+                    return {"status": "error", "message": "xdotool not found",
+                            "hint": "Install xdotool via `sudo apt install xdotool`. Also ensure $DISPLAY points to a running X session."}
                 ok = r.returncode == 0
             elif m == "above":
                 # Toggle _NET_WM_STATE_ABOVE to force window to front
-                r = self._run(["xprop", "-id", wid, "-f", "_NET_WM_STATE", "32a",
-                               "-set", "_NET_WM_STATE", "_NET_WM_STATE_ABOVE"])
+                try:
+                    r = self._run(["xprop", "-id", wid, "-f", "_NET_WM_STATE", "32a",
+                                   "-set", "_NET_WM_STATE", "_NET_WM_STATE_ABOVE"])
+                except FileNotFoundError:
+                    return {"status": "error", "message": "xprop not found",
+                            "hint": "Install xprop (usually part of `x11-xserver-utils`) via `sudo apt install x11-xserver-utils`."}
                 ok = r.returncode == 0
                 results.append({"method": m, "success": ok, "wid": wid,
                                 "message": r.stderr.strip() if not ok else ""})
@@ -991,8 +1064,11 @@ class ToolExecutor:
                     # Brief delay so the window manager raises it,
                     # then clear the property to restore normal stacking
                     time.sleep(0.1)
-                    self._run(["xprop", "-id", wid, "-f", "_NET_WM_STATE", "32a",
-                               "-set", "_NET_WM_STATE", ""])
+                    try:
+                        self._run(["xprop", "-id", wid, "-f", "_NET_WM_STATE", "32a",
+                                   "-set", "_NET_WM_STATE", ""])
+                    except FileNotFoundError:
+                        pass
                 continue
             results.append({"method": m, "success": ok, "wid": wid,
                             "message": r.stderr.strip() if not ok else ""})
@@ -1003,12 +1079,14 @@ class ToolExecutor:
         return {"status": "ok" if successful else "error",
                 "window_id": wid, "method": method,
                 "methods_tried": results,
-                "message": f"No focus method succeeded for '{title}'" if not successful else ""}
+                "message": f"No focus method succeeded for '{title}'" if not successful else "",
+                "hint": None if successful else "Ensure the window exists and is not minimized/closed. Try focus_window with method=activate first."}
 
     def list_windows(self):
         r = self._run(["xdotool", "search", "--name", ""])
         if r.returncode != 0:
-            return {"status": "error", "message": "xdotool search failed"}
+            return {"status": "error", "message": f"xdotool search failed (rc={r.returncode})",
+                    "hint": "Install xdotool via `sudo apt install xdotool`. Ensure $DISPLAY points to an X session."}
         result = []
         phantom_count = 0
         for wid in r.stdout.strip().split("\n"):
@@ -1031,7 +1109,8 @@ class ToolExecutor:
 
     def get_active_title(self):
         wid = self.ctx.get("active_window", {}).get("id")
-        if not wid: return {"status": "error", "message": "No active window"}
+        if not wid: return {"status": "error", "message": "No active window",
+                            "hint": "No window is currently in focus. Click a window or use focus_window first."}
         info = self.ctx.get("active_window", {})
         return {"status": "ok", "title": info.get("title", ""), "id": info.get("id")}
 
@@ -1049,11 +1128,11 @@ class ToolExecutor:
                 if kc:
                     self.input._backend.send_key(ch.lower(), True)
                     self.input._backend.send_key(ch.lower(), False)
-            return {"status": "ok", "method": "uinput"}
+            return {"status": "ok", "method": "uinput", "used_backend": "uinput"}
         else:
             # XTEST fallback
             self._run(["xdotool", "type", "--clearmodifiers", "--delay", "0", text])
-            return {"status": "ok", "method": "xtest"}
+            return {"status": "ok", "method": "xtest", "used_backend": "xtest"}
 
     def send_keys(self, keys):
         backends = self.ctx.get("input_backends", {})
@@ -1061,10 +1140,10 @@ class ToolExecutor:
             # Map common key combos to uinput sequences, reusing the InputRouter
             result = _send_keys_uinput(keys, self.input)
             if result:
-                return {"status": "ok", "method": "uinput"}
+                return {"status": "ok", "method": "uinput", "used_backend": "uinput"}
         # XTEST fallback
         self._run(["xdotool", "key", "--clearmodifiers", keys])
-        return {"status": "ok", "method": "xtest"}
+        return {"status": "ok", "method": "xtest", "used_backend": "xtest"}
 
     def click_at(self, x, y, button=1):
         backends = self.ctx.get("input_backends", {})
@@ -1077,11 +1156,12 @@ class ToolExecutor:
                 self.input._backend._cursor_y = ctx_cursor.get("y", 0)
             self.input.move_mouse(x, y)
             self.input.click(button)
+            return {"status": "ok", "x": x, "y": y, "button": button, "method": "uinput", "used_backend": "uinput"}
         else:
             method = "xtest"
             self._run(["xdotool", "mousemove", "--", str(x), str(y)])
             self._run(["xdotool", "click", str(button)])
-        return {"status": "ok", "x": x, "y": y, "button": button, "method": method}
+        return {"status": "ok", "x": x, "y": y, "button": button, "method": method, "used_backend": "xtest"}
 
     def move_cursor(self, x, y):
         backends = self.ctx.get("input_backends", {})
@@ -1092,17 +1172,19 @@ class ToolExecutor:
                 self.input._backend._cursor_x = ctx_cursor.get("x", 0)
                 self.input._backend._cursor_y = ctx_cursor.get("y", 0)
             self.input.move_mouse(x, y)
+            return {"status": "ok", "x": x, "y": y, "method": "uinput", "used_backend": "uinput"}
         else:
             method = "xtest"
             self._run(["xdotool", "mousemove", "--", str(x), str(y)])
-        return {"status": "ok", "x": x, "y": y, "method": method}
+        return {"status": "ok", "x": x, "y": y, "method": method, "used_backend": "xtest"}
 
     def get_cursor_pos(self):
         r = self._run(["xdotool", "getmouselocation"])
         if r.returncode == 0:
             m = re.search(r'x:(\d+)\s+y:(\d+)', r.stdout)
             if m: return {"status": "ok", "x": int(m.group(1)), "y": int(m.group(2))}
-        return {"status": "error", "message": "Could not get cursor position"}
+        return {"status": "error", "message": "Could not get cursor position",
+                "hint": "Ensure xdotool is installed (`sudo apt install xdotool`) and a display server is running."}
 
     def clipboard_get(self):
         try:
@@ -1110,29 +1192,53 @@ class ToolExecutor:
             if r.returncode == 0:
                 return {"status": "ok", "text": r.stdout}
         except FileNotFoundError: pass
+        except Exception:
+            return {"status": "error", "text": "", "method": "xclip",
+                    "hint": "xclip is installed but failed to read clipboard. Check X display ($DISPLAY) or try xsel."}
         try:
             r = self._run(["xsel"])
             if r.returncode == 0:
                 return {"status": "ok", "text": r.stdout}
         except FileNotFoundError: pass
-        return {"status": "ok", "text": ""}
+        except Exception:
+            return {"status": "error", "text": "", "method": "xsel",
+                    "hint": "xsel is installed but failed to read clipboard. Check X display ($DISPLAY) or try xclip."}
+        return {"status": "error", "text": "", "method": None,
+                "hint": "No clipboard utility found. Install xclip via `sudo apt install xclip` or xsel via `sudo apt install xsel`."}
 
     def clipboard_set(self, text):
         try:
             proc = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
-            proc.communicate(input=text.encode())
-            return {"status": "ok", "text_set": True}
-        except FileNotFoundError: pass
-        try:
-            proc = subprocess.Popen(["xsel", "--clipboard", "--input"], stdin=subprocess.PIPE)
-            proc.communicate(input=text.encode())
+            stdout, stderr = proc.communicate(input=text.encode())
+            if proc.returncode != 0:
+                return {"status": "error", "message": f"xclip failed ({proc.returncode})",
+                        "detail": stderr.strip() if stderr else "unknown exit code",
+                        "hint": "Check $DISPLAY is set correctly. Try `export DISPLAY=:0.0` or switch to xsel."}
             return {"status": "ok", "text_set": True}
         except FileNotFoundError:
-            return {"status": "error", "message": "No clipboard utility found (xclip or xsel required)"}
+            pass
+        except Exception as e:
+            return {"status": "error", "message": f"xclip exception: {e}",
+                    "hint": "Ensure xclip is installed (`sudo apt install xclip`) and the X display is accessible."}
+        try:
+            proc = subprocess.Popen(["xsel", "--clipboard", "--input"], stdin=subprocess.PIPE)
+            stdout, stderr = proc.communicate(input=text.encode())
+            if proc.returncode != 0:
+                return {"status": "error", "message": f"xsel failed ({proc.returncode})",
+                        "detail": stderr.strip() if stderr else "unknown exit code",
+                        "hint": "Try xclip instead (`sudo apt install xclip`) or check $DISPLAY."}
+            return {"status": "ok", "text_set": True}
+        except FileNotFoundError:
+            return {"status": "error", "message": "No clipboard utility found (xclip or xsel required)",
+                    "hint": "Install one via `sudo apt install xclip` or `sudo apt install xsel`."}
+        except Exception as e:
+            return {"status": "error", "message": f"xsel exception: {e}",
+                    "hint": "Ensure xsel is installed (`sudo apt install xsel`) and the X display is accessible."}
 
     def get_window_geometry(self):
         wid = self.ctx.get("active_window", {}).get("id_int")
-        if not wid: return {"status": "error", "message": "No active window"}
+        if not wid: return {"status": "error", "message": "No active window",
+                            "hint": "No active window detected. Focus a window first."}
         r = self._run(["xdotool", "getwindowgeometry", "--shell", str(wid)])
         if r.returncode == 0:
             geom = {}
@@ -1141,20 +1247,29 @@ class ToolExecutor:
                     k, v = line.split("=", 1)
                     geom[k.strip()] = v.strip()
             return {"status": "ok", **geom}
-        return {"status": "error", "message": "Could not get window geometry"}
+        return {"status": "error", "message": "Could not get window geometry",
+                "hint": "xdotool getwindowgeometry failed. Ensure the window still exists."}
 
     def resize_window(self, width, height):
         wid = self.ctx.get("active_window", {}).get("id_int")
-        if not wid: return {"status": "error", "message": "No active window"}
+        if not wid: return {"status": "error", "message": "No active window",
+                            "hint": "No active window detected. Focus a window first."}
         r = self._run(["xdotool", "windowsize", str(wid), str(width), str(height)])
         return {"status": "ok" if r.returncode == 0 else "error",
-                "width": width, "height": height}
+                "width": width, "height": height,
+                "hint": None if r.returncode == 0 else "xdotool windowsize failed. Ensure the window is not minimized or closed."}
 
     def get_focused_element(self):
         """Read the focused accessibility node (real AT-SPI resolution)."""
         if not ATSPI:
-            return {"status": "error", "message": "atspi_resolve module not available"}
-        return ATSPI.focused_element()
+            return {"status": "error", "message": "atspi_resolve module not available",
+                    "hint": "Electron/GTK apps usually need `atk-bridge` installed. Install via `sudo apt install libatk-bridge2.0-0`, then ensure the accessibility bus is running."}
+        r = ATSPI.resolve_focus()
+        node = r.get("focus")
+        if node:
+            return node
+        return {"status": "error", "message": r.get("message", "No focused element found"),
+                "hint": "Electron/GTK apps usually need `atk-bridge` installed. Install via `sudo apt install libatk-bridge2.0-0`. Also check that the AT-SPI registry is running."}
 
     def atspi_click(self):
         """Invoke the focused node's default accessibility action.
@@ -1163,14 +1278,21 @@ class ToolExecutor:
         it did not (no node resolved, or the node has no Action interface).
         """
         if not ATSPI:
-            return {"status": "error", "message": "atspi_resolve module not available"}
+            return {"status": "error", "message": "AT-SPI resolver unavailable",
+                    "hint": "Install `atk-bridge` via `sudo apt install libatk-bridge2.0-0`."}
         r = ATSPI.resolve_focus()
-        return ATSPI.do_action(r.get("focus"), 0)
+        try:
+            result = ATSPI.do_action(r.get("focus"), 0)
+        except Exception as e:
+            return {"status": "error", "message": f"atspi_do_action failed: {e}",
+                    "hint": "The focused node may not support the Action interface. Try another app."}
+        return result
 
     def atspi_read_text(self):
         """Read text from the focused accessibility node."""
         if not ATSPI:
-            return {"status": "error", "message": "atspi_resolve module not available"}
+            return {"status": "error", "message": "atspi_resolve module not available",
+                    "hint": "Install `atk-bridge` via `sudo apt install libatk-bridge2.0-0`."}
         r = ATSPI.resolve_focus()
         return ATSPI.read_text(r.get("focus"))
 
@@ -1192,10 +1314,14 @@ class ToolExecutor:
         r = self._run(["pgrep", "-f", "sxhkd.*deskkit_hotkeys"])
         if r.returncode != 0:
             # Start a dedicated sxhkd instance for DeskKit hotkeys
-            self._run([
-                "sxhkd", "-c", str(hk_dir) + "/*.conf",
-                "-r", "0.5"  # 0.5s chord timeout
-            ])
+            try:
+                self._run([
+                    "sxhkd", "-c", str(hk_dir) + "/*.conf",
+                    "-r", "0.5"  # 0.5s chord timeout
+                ])
+            except Exception as e:
+                return {"status": "error", "message": f"sxhkd failed to start: {e}",
+                        "hint": "Install sxhkd via `sudo apt install sxhkd`. Ensure it's configured as your global hotkey daemon."}
 
         return {"status": "ok", "hotkey_id": hk_id, "key": key, "command": command,
                 "config_file": str(hk_file)}
@@ -1207,38 +1333,79 @@ class ToolExecutor:
         if hk_file.exists():
             hk_file.unlink()
             return {"status": "ok", "removed": True, "id": id}
-        return {"status": "error", "message": f"Hotkey ID '{id}' not found"}
+        return {"status": "error", "message": f"Hotkey ID '{id}' not found",
+                "hint": "List registered hotkeys via `deskkit list_tools | grep hotkey`, or check the hotkey_id returned by register_hotkey."}
 
     def set_always_on_top(self, state="toggle"):
-        """Toggle _NET_WM_STATE_ABOVE on the active window — light-switch style."""
+        """Toggle _NET_WM_STATE_ABOVE on the active window — light-switch style.
+        
+        Returns unified keys across all branches:
+          status, window_id, action (added_above|removed_above|set_above),
+          current_state (above|normal), method
+        """
         wid = self.ctx.get("active_window", {}).get("id_int")
         if not wid:
-            return {"status": "error", "message": "No active window"}
+            return {"status": "error", "message": "No active window",
+                    "hint": "No window is currently active. Focus a window first.",
+                    "window_id": None, "action": None, "current_state": None, "method": None}
 
-        wm_state = "_NET_WM_STATE_ABOVE" if state == "on" else ""
+        # Check current _NET_WM_STATE before any change
+        try:
+            check_before = self._run(["xprop", "-id", str(wid), "_NET_WM_STATE"])
+        except FileNotFoundError:
+            return {"status": "error", "message": "xprop not found",
+                    "hint": "Install xprop via `sudo apt install x11-xserver-utils`.",
+                    "window_id": wid, "action": None, "current_state": None, "method": None}
+        had_above_before = "_NET_WM_STATE_ABOVE" in check_before.stdout
+
         if state == "off":
-            # Remove _NET_WM_STATE_ABOVE by setting _NET_WM_STATE to empty
+            # Remove _NET_WM_STATE_ABOVE by clearing _NET_WM_STATE
             r = self._run(["xprop", "-id", str(wid), "-f", "_NET_WM_STATE", "32a",
                            "-set", "_NET_WM_STATE", ""])
-            return {"status": "ok", "window_id": wid, "action": "removed_above",
-                    "method": "xprop_clear"}
+            # Verify after
+            check_after = self._run(["xprop", "-id", str(wid), "_NET_WM_STATE"])
+            now_above = "_NET_WM_STATE_ABOVE" in check_after.stdout
+            return {"status": "ok" if r.returncode == 0 else "error",
+                    "window_id": wid, "action": "removed_above",
+                    "current_state": "above" if now_above else "normal",
+                    "method": "xprop_clear",
+                    "hint": None if r.returncode == 0 else "xprop failed to clear _NET_WM_STATE_ABOVE."}
 
         # state == "on" or "toggle"
         if state == "toggle":
-            # Check current state
-            check = self._run(["xprop", "-id", str(wid), "_NET_WM_STATE"])
-            has_above = "_NET_WM_STATE_ABOVE" in check.stdout
-            wm_state = "_NET_WM_STATE" if has_above else "_NET_WM_STATE_ABOVE"
-            r = self._run(["xprop", "-id", str(wid), "-f", "_NET_WM_STATE", "32a",
-                           "-set", "_NET_WM_STATE",
-                           "_NET_WM_STATE_ABOVE" if not has_above else "@"])
-            return {"status": "ok", "window_id": wid,
-                    "action": "added_above" if not has_above else "removed_above",
-                    "current_state": "above" if not has_above else "normal"}
+            has_above = had_above_before
+            if has_above:
+                # Remove above
+                r = self._run(["xprop", "-id", str(wid), "-f", "_NET_WM_STATE", "32a",
+                               "-set", "_NET_WM_STATE", "@"])
+                action = "removed_above"
+                new_state = "normal"
+            else:
+                # Add above
+                r = self._run(["xprop", "-id", str(wid), "-f", "_NET_WM_STATE", "32a",
+                               "-set", "_NET_WM_STATE", "_NET_WM_STATE_ABOVE"])
+                action = "added_above"
+                new_state = "above"
+            # Verify after
+            check_after = self._run(["xprop", "-id", str(wid), "_NET_WM_STATE"])
+            still_above = "_NET_WM_STATE_ABOVE" in check_after.stdout
+            return {"status": "ok" if r.returncode == 0 else "error",
+                    "window_id": wid, "action": action,
+                    "current_state": "above" if still_above else "normal",
+                    "method": "xprop_toggle",
+                    "hint": None if r.returncode == 0 else "xprop toggle failed"}
 
+        # state == "on"
         r = self._run(["xprop", "-id", str(wid), "-f", "_NET_WM_STATE", "32a",
                        "-set", "_NET_WM_STATE", "_NET_WM_STATE_ABOVE"])
-        return {"status": "ok", "window_id": wid, "action": "set_above"}
+        # Verify after
+        check_after = self._run(["xprop", "-id", str(wid), "_NET_WM_STATE"])
+        now_above = "_NET_WM_STATE_ABOVE" in check_after.stdout
+        return {"status": "ok" if r.returncode == 0 else "error",
+                "window_id": wid, "action": "set_above",
+                "current_state": "above" if now_above else "normal",
+                "method": "xprop_set",
+                "hint": None if r.returncode == 0 else "xprop set failed"}
 
     def register_hotkey_uinput(self, key: str, command: str):
         """Register a hotkey monitored at the uinput/kernel level by reading
@@ -1252,7 +1419,8 @@ class ToolExecutor:
         for p in parts:
             code = LINUX_KEYCODES.get(p)
             if code is None:
-                return {"status": "error", "message": f"Unknown key: {p}"}
+                return {"status": "error", "message": f"Unknown key: {p}",
+                        "hint": "Use standard key names (e.g. 'ctrl', 'shift', 'f1', 'alt'). See deskkit list_tools for details."}
             key_codes.append(code)
 
         combo_str = "+".join(parts)
@@ -1291,7 +1459,8 @@ class ToolExecutor:
 
         if not keyboard_devs:
             return {"status": "error",
-                    "message": "No keyboard /dev/input/event* device found"}
+                    "message": "No keyboard /dev/input/event* device found",
+                    "hint": "Ensure you have keyboard devices (/dev/input/event*) and are in the 'input' group (sudo usermod -aG input $USER; re-login)."}
 
         config_file.write_text(json.dumps({
             "id": hk_id, "combo_str": combo_str,
@@ -1504,27 +1673,58 @@ def cmd_run(tool_name: str, args: list[str]):
             print(f"  Run 'deskkit list_tools' to see currently available tools.")
             sys.exit(2)
 
-    # Parse parameters
+    # Parse parameters — map positional args by schema name, not index
     params = tool.get("parameters", {})
+    spec_names = list(params.keys())
     param_values = {}
-    i = 0
-    for arg_name, arg_spec in params.items():
-        if i < len(args):
-            raw = args[i]
-            if arg_spec["type"] == "integer":
-                param_values[arg_name] = int(raw)
+    # Validate types BEFORE executing the handler
+    type_hints = {}
+    for name, spec in params.items():
+        type_hints[name] = spec.get("type")
+
+    # Start with defaults
+    for name, spec in params.items():
+        if "default" in spec:
+            param_values[name] = spec["default"]
+
+    # Positional args mapped by schema order
+    arg_idx = 0
+    for name in spec_names:
+        if arg_idx < len(args):
+            raw = args[arg_idx]
+            typ = type_hints.get(name)
+            if typ == "integer":
+                try:
+                    param_values[name] = int(raw)
+                except ValueError:
+                    print(json.dumps({"status": "validation_error",
+                                      "message": f"Field '{name}' requires an integer.",
+                                      "expected": "integer", "got": raw}, indent=2))
+                    sys.exit(1)
+            elif typ == "number":
+                try:
+                    param_values[name] = float(raw)
+                except ValueError:
+                    print(json.dumps({"status": "validation_error",
+                                      "message": f"Field '{name}' requires a number.",
+                                      "expected": "number", "got": raw}, indent=2))
+                    sys.exit(1)
             else:
-                param_values[arg_name] = raw
-            i += 1
-        elif "default" in arg_spec:
-            param_values[arg_name] = arg_spec["default"]
+                param_values[name] = raw
+            arg_idx += 1
 
     # Check for missing required params
     missing = [name for name, spec in params.items()
                if name not in param_values and "default" not in spec]
     if missing:
         print(f"Error: Missing parameters: {missing}")
-        print(f"Usage: deskkit {tool_name} <'{' '.join(params.keys())}'>")
+        print(f"Usage: deskkit {tool_name} {' '.join(spec_names)}")
+        sys.exit(1)
+
+    # Validate that no extra positional args were provided
+    if arg_idx < len(args):
+        print(f"Error: Too many positional arguments ({len(args)} provided, {len(spec_names)} expected)")
+        print(f"Usage: deskkit {tool_name} {' '.join(spec_names)}")
         sys.exit(1)
 
     # Execute
